@@ -11,6 +11,8 @@ import {
   doc,
   setDoc,
   getDoc,
+  deleteDoc,
+  updateDoc,
   orderBy,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
@@ -45,6 +47,8 @@ const Dashboard: React.FC = () => {
   const [type, setType] = useState<"expense" | "income">("expense");
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
 
   // Categories for selection
   const categories = [
@@ -241,6 +245,104 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const handleDeleteExpense = async (expense: Expense) => {
+    if (!user) return;
+
+    try {
+      // Calculate balance adjustment (reverse the transaction)
+      const balanceAdjustment =
+        expense.type === "income" ? -expense.amount : expense.amount;
+      const newBalance = balance + balanceAdjustment;
+
+      // Delete the expense from Firestore
+      await deleteDoc(doc(db, "expenses", expense.id));
+
+      // Update the balance
+      await updateBalance(newBalance);
+
+      console.log("Transaksi berhasil dihapus");
+    } catch (error) {
+      console.error("Error deleting expense:", error);
+      alert("Gagal menghapus transaksi");
+    }
+  };
+
+  const handleEditExpense = (expense: Expense) => {
+    setEditingExpense(expense);
+    setIsEditMode(true);
+
+    // Pre-fill the form with expense data
+    setAmount(expense.amount.toString());
+    setDescription(expense.description);
+    setCategory(expense.category);
+    setType(expense.type);
+  };
+
+  const handleUpdateExpense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !amount || !editingExpense) return;
+
+    setLoading(true);
+    const numericAmount = parseFloat(amount);
+
+    try {
+      // Calculate balance adjustment
+      const oldAmount = editingExpense.amount;
+      const oldType = editingExpense.type;
+      const newType = type;
+
+      let balanceAdjustment = 0;
+
+      if (oldType === "income" && newType === "income") {
+        balanceAdjustment = numericAmount - oldAmount;
+      } else if (oldType === "expense" && newType === "expense") {
+        balanceAdjustment = oldAmount - numericAmount;
+      } else if (oldType === "income" && newType === "expense") {
+        balanceAdjustment = -oldAmount - numericAmount;
+      } else if (oldType === "expense" && newType === "income") {
+        balanceAdjustment = oldAmount + numericAmount;
+      }
+
+      const newBalance = balance + balanceAdjustment;
+
+      // Update the expense in Firestore
+      await updateDoc(doc(db, "expenses", editingExpense.id), {
+        amount: numericAmount,
+        description,
+        category,
+        type,
+        date: editingExpense.date, // Keep original date
+        userId: user.uid,
+      });
+
+      // Update the balance
+      await updateBalance(newBalance);
+
+      // Reset form and editing state
+      setAmount("");
+      setDescription("");
+      setCategory("");
+      setType("expense");
+      setEditingExpense(null);
+      setIsEditMode(false);
+
+      console.log("Transaksi berhasil diperbarui");
+    } catch (error) {
+      console.error("Error updating expense:", error);
+      alert("Gagal memperbarui transaksi");
+    }
+    setLoading(false);
+  };
+
+  const cancelEdit = () => {
+    setEditingExpense(null);
+    setIsEditMode(false);
+    setAmount("");
+    setDescription("");
+    setCategory("");
+    setType("expense");
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900">
       <div className="container mx-auto p-4">
@@ -375,9 +477,12 @@ const Dashboard: React.FC = () => {
               {/* Add Expense/Income Card */}
               <GlassCard className="p-6 lg:col-span-2">
                 <h2 className="text-2xl font-bold text-white mb-4">
-                  Catat Transaksi Baru
+                  {isEditMode ? "Edit Transaksi" : "Catat Transaksi Baru"}
                 </h2>
-                <form onSubmit={handleAddExpense} className="space-y-4">
+                <form
+                  onSubmit={isEditMode ? handleUpdateExpense : handleAddExpense}
+                  className="space-y-4"
+                >
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-white text-sm font-medium mb-2">
@@ -445,9 +550,26 @@ const Dashboard: React.FC = () => {
                     </Select>
                   </div>
 
-                  <Button type="submit" disabled={loading} className="w-full">
-                    {loading ? "Mencatat..." : "Catat Transaksi"}
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button type="submit" disabled={loading} className="flex-1">
+                      {loading
+                        ? "Menyimpan..."
+                        : isEditMode
+                        ? "Perbarui Transaksi"
+                        : "Catat Transaksi"}
+                    </Button>
+
+                    {isEditMode && (
+                      <Button
+                        type="button"
+                        onClick={cancelEdit}
+                        variant="secondary"
+                        className="flex-1"
+                      >
+                        Batal Edit
+                      </Button>
+                    )}
+                  </div>
                 </form>
               </GlassCard>
             </div>
@@ -532,6 +654,8 @@ const Dashboard: React.FC = () => {
               <ExpenseHistory
                 expenses={expenses}
                 formatCurrency={formatCurrency}
+                onDeleteExpense={handleDeleteExpense}
+                onEditExpense={handleEditExpense}
               />
             </div>
           </div>
